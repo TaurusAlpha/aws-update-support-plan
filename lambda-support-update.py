@@ -11,14 +11,8 @@ if TYPE_CHECKING:
 
 # Configure logging
 logger = logging.getLogger()
-log_level_name = os.getenv(
-    "logger_level", "DEBUG"
-)  # Fetch the log level name from the environment
-log_level = getattr(
-    logging, log_level_name.upper(), logging.DEBUG
-)  # Convert to logging level, defaulting to DEBUG
-
-logging.basicConfig(level=log_level, format="%(asctime)s %(message)s")
+logging.basicConfig(format="%(asctime)s %(message)s")
+logger.setLevel(logging.INFO if os.getenv("logger_level") else logging.DEBUG)
 
 
 SUPPORT_LEVEL_MAPPING = {
