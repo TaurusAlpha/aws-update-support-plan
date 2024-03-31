@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Setup to handle new AWS account creations and update their support tier.
+
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+        - PolicyName: LambdaSupportPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'support:CreateCase'
+                  - 'support:DescribeServices'
+                  - 'support:DescribeSeverityLevels'
+                Resource: '*'
+
+  SupportUpdateFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          from __future__ import annotations
+          import logging
+          import boto3
+          import os
+          import cfnresponse  # type: ignore[import-untyped]
+          from typing import TYPE_CHECKING
+
+          if TYPE_CHECKING:
+              from mypy_boto3_support import SupportClient
+
+          logger = logging.getLogger()
+          logging.basicConfig(format="%(asctime)s %(message)s")
+          logger.setLevel(logging.INFO if os.getenv("logger_level") else logging.DEBUG)
+
+
+          def lambda_handler(event, context) -> None:
+              """
+              Lambda function handler for updating the support plan of a newly created AWS account.
+
+              Args:
+                  event (dict): The event data passed to the Lambda function.
+                  context (LambdaContext): The runtime information of the Lambda function.
+
+              Returns:
+                  None
+              """
+              try:
+                  # Extract the request type
+                  request_type = event["RequestType"]
+                  # Parse the account ID of the newly created account from the event
+                  account_id = context.invoked_function_arn.split(":")[4]
+
+                  if request_type == "Create":
+                      # Handle creation logic here
+                      # Update the support plan by opening a support case
+                      # Region is hardcoded to us-east-1 because support is Global Service and API calls are made to us-east-1 region
+                      support_client: SupportClient = boto3.client(
+                          "support", region_name="us-east-1"
+                      )
+                      response = support_client.create_case(
+                          subject="Update Support Plan for New Account",
+                          serviceCode="account-management",
+                          severityCode="low",
+                          categoryCode="other",
+                          communicationBody=f"Please update the support plan of account {account_id} to Enterprise.",
+                          issueType="customer-service",
+                      )
+                      responseData = {"CaseId": response["caseId"]}
+                      logger.info(f"Support case created with case ID: {response['caseId']}")
+                      cfnresponse.send(
+                          event, context, cfnresponse.SUCCESS, responseData, "CustomResourceId"
+                      )
+
+                  elif request_type in ["Update", "Delete"]:
+                      # For simplicity, do nothing on update and delete but signal SUCCESS
+                      cfnresponse.send(
+                          event, context, cfnresponse.SUCCESS, {}, event["PhysicalResourceId"]
+                      )
+
+              except Exception as e:
+                  # Report any exceptions as a FAILED
+                  errorMessage = str(e)
+                  cfnresponse.send(
+                      event,
+                      context,
+                      cfnresponse.FAILED,
+                      {"Message": errorMessage},
+                      "CustomResourceId",
+                  )
+
+      Runtime: python3.12
+      Timeout: 60
+      MemorySize: 128
+
+  LambdaInvokeSupportUpdateFunction:
+    Type: Custom::LambdaInvoker
+    Properties:
+      ServiceToken: !GetAtt SupportUpdateFunction.Arn
+
+Outputs:
+  LambdaFunctionARN:
+    Description: The ARN of the Lambda function
+    Value: !GetAtt SupportUpdateFunction.Arn

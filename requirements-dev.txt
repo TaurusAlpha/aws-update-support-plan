@@ -1,0 +1,7 @@
+cfn-lint
+boto3
+boto3-stubs
+mypy
+mypy-boto3-support
+aws_lambda_powertools
+cfnresponse
