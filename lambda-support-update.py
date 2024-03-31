@@ -30,12 +30,14 @@ def check_support_plan(support_client: SupportClient) -> str:
     """
     try:
         response = support_client.describe_severity_levels(language="en")
-        if not response["severityLevels"]:  # Check if the list is empty
-            logger.info(
-                "No severity levels returned; defaulting to 'low' support level."
-            )
-            return SUPPORT_LEVEL_MAPPING["low"]  # Default to 'low' if the list is empty
-        return SUPPORT_LEVEL_MAPPING[response["severityLevels"][-1]["code"]]
+        return (
+            sorted(
+                SUPPORT_LEVEL_MAPPING[sv_lvl["code"]]
+                for sv_lvl in response["severityLevels"]
+            )[-1]
+            if response["severityLevels"]
+            else SUPPORT_LEVEL_MAPPING["low"]
+        )
     except support_client.exceptions.ClientError as err:
         if err.response["Error"]["Code"] == "SubscriptionRequiredException":
             return SUPPORT_LEVEL_MAPPING["low"]
