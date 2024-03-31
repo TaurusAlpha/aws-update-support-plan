@@ -1,44 +1,56 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Description: Setup to handle new AWS account creations and update their support tier.
-
+Parameters:
+  SupportLevel:
+    Type: String
+    Default: "enterprise"
+    Description: The support plan level to update the newly created account to.
+    AllowedValues:
+      - "basic"
+      - "business"
+      - "enterprise"
 Resources:
   LambdaExecutionRole:
-    Type: 'AWS::IAM::Role'
+    Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service: lambda.amazonaws.com
-            Action: 'sts:AssumeRole'
+            Action: "sts:AssumeRole"
       Policies:
         - PolicyName: LambdaLogsPolicy
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - 'logs:CreateLogGroup'
-                  - 'logs:CreateLogStream'
-                  - 'logs:PutLogEvents'
-                Resource: '*'
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "*"
         - PolicyName: LambdaSupportPolicy
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - 'support:CreateCase'
-                  - 'support:DescribeServices'
-                  - 'support:DescribeSeverityLevels'
-                Resource: '*'
+                  - "support:CreateCase"
+                  - "support:DescribeServices"
+                  - "support:DescribeSeverityLevels"
+                Resource: "*"
 
   SupportUpdateFunction:
-    Type: 'AWS::Lambda::Function'
+    Type: "AWS::Lambda::Function"
     Properties:
       Handler: index.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          logger_level: "INFO"
+          required_support_level: !Ref SupportLevel
       Code:
         ZipFile: |
           from __future__ import annotations
@@ -110,7 +122,6 @@ Resources:
                       {"Message": errorMessage},
                       "CustomResourceId",
                   )
-
       Runtime: python3.12
       Timeout: 60
       MemorySize: 128
