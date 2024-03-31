@@ -94,5 +94,4 @@ def lambda_handler(event, context) -> None:
 
     except Exception as e:
         # Report any exceptions as a FAILED
-        errorMessage = str(e)
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Message": errorMessage})
+        cfnresponse.send(event, context, cfnresponse.FAILED, {"Message": f"{e}"})
