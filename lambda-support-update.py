@@ -1,5 +1,4 @@
 from __future__ import annotations
-from enum import Enum
 import logging
 import boto3
 import os
@@ -45,6 +44,9 @@ def check_support_plan(support_client: SupportClient) -> str:
 
 
 def lambda_handler(event, context) -> None:
+    """
+    Lambda function handler for updating the support plan for a new account.
+    """
     logger.info(f"Received event: {event}")
     try:
         # Extract the request type from the event
@@ -53,9 +55,8 @@ def lambda_handler(event, context) -> None:
         account_id = context.invoked_function_arn.split(":")[4]
         required_support_level = os.environ.get("required_support_level", "basic")
 
+        # Handle creation logic
         if request_type == "Create":
-            # Handle creation logic here
-            # Create a support case to update the support plan for the new account
             support_client: SupportClient = boto3.client(
                 "support", region_name=os.environ.get("AWS_REGION", "us-east-1")
             )
@@ -83,11 +84,8 @@ def lambda_handler(event, context) -> None:
             )
             logger.info(f"Create case response: {response}")
             responseData = {"CaseId": response["caseId"]}
-            logger.info(f"Support case created with case ID: {response['caseId']}")
             # Send a success response to CloudFormation
-            cfnresponse.send(
-                event, context, cfnresponse.SUCCESS, responseData
-            )
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
 
         elif request_type in ["Update", "Delete"]:
             # For Update and Delete requests, do nothing but signal SUCCESS
