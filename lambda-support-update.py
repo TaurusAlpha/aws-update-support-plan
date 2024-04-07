@@ -9,10 +9,10 @@ if TYPE_CHECKING:
     from mypy_boto3_support import SupportClient
 
 # Configure logging
+logging.basicConfig(
+    format="%(asctime)s %(message)s", level=os.getenv("logger_level", "DEBUG")
+)
 logger = logging.getLogger()
-logging.basicConfig(format="%(asctime)s %(message)s")
-logger.setLevel(logging.INFO if os.getenv("logger_level") else logging.DEBUG)
-
 
 SUPPORT_LEVEL_MAPPING = {
     "low": "basic",
