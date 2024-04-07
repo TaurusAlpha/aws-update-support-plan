@@ -9,6 +9,16 @@ Parameters:
       - "basic"
       - "business"
       - "enterprise"
+  LambdaLogLevel:
+    Type: String
+    Default: "INFO"
+    Description: The log level for the Lambda function.
+    AllowedValues:
+      - "DEBUG"
+      - "INFO"
+      - "WARNING"
+      - "ERROR"
+      - "CRITICAL"
 Resources:
   LambdaExecutionRole:
     Type: "AWS::IAM::Role"
@@ -49,7 +59,7 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          logger_level: "INFO"
+          logger_level: !Ref LambdaLogLevel
           required_support_level: !Ref SupportLevel
       Code:
         ZipFile: |

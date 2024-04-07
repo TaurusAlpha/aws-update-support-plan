@@ -45,6 +45,7 @@ def check_support_plan(support_client: SupportClient) -> str:
 
 
 def lambda_handler(event, context) -> None:
+    logger.info(f"Received event: {event}")
     try:
         # Extract the request type from the event
         request_type = event["RequestType"]
@@ -67,8 +68,9 @@ def lambda_handler(event, context) -> None:
                     event,
                     context,
                     cfnresponse.SUCCESS,
-                    {},
-                    event["PhysicalResourceId"],
+                    {
+                        "Message": f"Account {account_id} already has an {required_support_level} support plan."
+                    },
                 )
                 return
             response = support_client.create_case(
@@ -79,11 +81,12 @@ def lambda_handler(event, context) -> None:
                 communicationBody=f"Please update the support plan of account {account_id} to {required_support_level}.",
                 issueType="customer-service",
             )
+            logger.info(f"Create case response: {response}")
             responseData = {"CaseId": response["caseId"]}
             logger.info(f"Support case created with case ID: {response['caseId']}")
             # Send a success response to CloudFormation
             cfnresponse.send(
-                event, context, cfnresponse.SUCCESS, responseData, "CustomResourceId"
+                event, context, cfnresponse.SUCCESS, responseData
             )
 
         elif request_type in ["Update", "Delete"]:
