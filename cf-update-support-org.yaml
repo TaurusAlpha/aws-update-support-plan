@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Setup to handle new AWS account creations and update their support tier.
+
+Parameters:
+  SupportLevel:
+    Type: String
+    Default: "enterprise"
+    Description: The support plan level to update the newly created account to.
+    AllowedValues:
+      - "basic"
+      - "business"
+      - "enterprise"
+  LambdaLogLevel:
+    Type: String
+    Default: "INFO"
+    Description: The log level for the Lambda function.
+    AllowedValues:
+      - "DEBUG"
+      - "INFO"
+      - "WARNING"
+      - "ERROR"
+      - "CRITICAL"
+  OrganizationId:
+    Type: String
+    Description: The ID of the AWS Organization.
+
+Resources:
+  IAMRoleStackSet:
+    Type: "AWS::CloudFormation::StackSet"
+    Properties:
+      Description: "Nested stack to create the IAM role for the Lambda function."
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: false
+      CallAs: "SELF"
+      Capabilities:
+        - "CAPABILITY_NAMED_IAM"
+      PermissionModel: "SERVICE_MANAGED"
+      StackSetName: "cfs-root-IAMRoleForLambdaUpdateSupportFunction"
+      Parameters:
+        - ParameterKey: LambdaExecutionRoleName
+          ParameterValue: !Ref LambdaExecutionRole
+        - ParameterKey: RootAccountId
+          ParameterValue: !Ref "AWS::AccountId"
+      StackInstancesGroup:
+        - DeploymentTargets:
+            OrganizationalUnitIds:
+              - !Ref OrganizationId
+          Regions:
+            - !Ref "AWS::Region"
+      TemplateBody: |
+        {
+          "AWSTemplateFormatVersion": "2010-09-09",
+          "Description": "IAM role for Lambda function.",
+          "Parameters": {
+            "LambdaExecutionRoleName": {
+              "Type": "String",
+              "Description": "The ARN of the Lambda Execution Role."
+            },
+            "RootAccountId": {
+              "Type": "String",
+              "Description": "The ID of the AWS account."
+            }
+          },
+          "Resources": {
+            "LambdaAssumeSupportRole": {
+              "Type": "AWS::IAM::Role",
+              "Properties": {
+                "RoleName": "LambdaAssumeSupportRole",
+                "AssumeRolePolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Principal": {
+                        "AWS": { "Fn::Sub": "arn:aws:iam::${RootAccountId}:role/${LambdaExecutionRoleName}" }
+                      },
+                      "Action": "sts:AssumeRole"
+                    }
+                  ]
+                },
+                "Policies": [
+                  {
+                    "PolicyName": "LambdaSupportPolicy",
+                    "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Effect": "Allow",
+                          "Action": [
+                            "support:DescribeServices",
+                            "support:DescribeSeverityLevels"
+                          ],
+                          "Resource": "*"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "role-lambda-update-support"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: LambdaLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "*"
+        - PolicyName: LambdaSupportPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "support:CreateCase"
+                Resource: "*"
+        - PolicyName: LambdaAssumeRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "sts:AssumeRole"
+                Resource: "*"
+
+  SupportUpdateFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: "lambda-root-update-support"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          logger_level: !Ref LambdaLogLevel
+          required_support_level: !Ref SupportLevel
+          assume_role_name: "arn:aws:iam::<ACCOUNT_ID>:role/LambdaAssumeSupportRole"
+      Code:
+        ZipFile: |
+          from __future__ import annotations
+          import logging
+          import boto3
+          import os
+          from typing import TYPE_CHECKING
+
+          if TYPE_CHECKING:
+              from mypy_boto3_support import SupportClient
+              from mypy_boto3_sts import STSClient
+
+          # Configure logging
+          logger = logging.getLogger()
+          logging.basicConfig(format="%(asctime)s %(message)s")
+          logger.setLevel(logging.getLevelName(os.getenv("logger_level", "INFO")))
+
+          SUPPORT_LEVEL_MAPPING = {
+              "low": "basic",
+              "normal": "basic",
+              "high": "business",
+              "urgent": "business",
+              "critical": "enterprise",
+          }
+
+          def check_support_plan(account_id: str) -> str:
+              """
+              Check the current support plan of the account.
+              """
+              role_arn = os.environ["assume_role_name"].replace("<ACCOUNT_ID>", account_id)
+              sts_client: STSClient = boto3.client("sts")
+              stsObject = sts_client.assume_role(
+                  RoleArn=role_arn, RoleSessionName="AssumeRoleSession"
+              )
+              credentials = stsObject["Credentials"]
+              support_client: SupportClient = boto3.client(
+                  "support",
+                  aws_access_key_id=credentials["AccessKeyId"],
+                  aws_secret_access_key=credentials["SecretAccessKey"],
+                  aws_session_token=credentials["SessionToken"],
+              )
+              try:
+                  response = support_client.describe_severity_levels(language="en")
+                  return (
+                      sorted(
+                          SUPPORT_LEVEL_MAPPING[sv_lvl["code"]]
+                          for sv_lvl in response["severityLevels"]
+                      )[-1]
+                      if response["severityLevels"]
+                      else SUPPORT_LEVEL_MAPPING["low"]
+                  )
+              except support_client.exceptions.ClientError as err:
+                  if err.response["Error"]["Code"] == "SubscriptionRequiredException":
+                      return SUPPORT_LEVEL_MAPPING["low"]
+                  raise err
+
+          def lambda_handler(event, context) -> None:
+              """
+              Lambda function handler for updating the support plan for a new account.
+              """
+              logger.info(f"Received event: {event}")
+              account_id = event["accountId"]
+              required_support_level = os.environ.get("required_support_level", "basic")
+
+              if check_support_plan(account_id) == required_support_level:
+                  logger.info(
+                      f"Account {account_id} already has an {required_support_level} support plan."
+                  )
+                  return
+
+              support_client: SupportClient = boto3.client(
+                  "support", region_name=os.environ.get("AWS_REGION", "us-east-1")
+              )
+
+              response = support_client.create_case(
+                  subject="Update Support Plan for New Account",
+                  serviceCode="account-management",
+                  severityCode="low",
+                  categoryCode="other",
+                  communicationBody=f"Please update the support plan of account {account_id} to {required_support_level}.",
+                  issueType="customer-service",
+              )
+              logger.info(f"Create case response: {response}")
+              return
+
+      Runtime: python3.12
+      Timeout: 60
+      MemorySize: 128
+
+  AccountCreationEventRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Name: "evr-root-update-support"
+      Description: "Trigger Lambda to update support level function on AWS account creation"
+      EventPattern:
+        source:
+          - "aws.controltower"
+        detail:
+          eventName:
+            - "CreateManagedAccount"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt SupportUpdateFunction.Arn
+          Id: "SupportUpdateFunction"
+          Input: "$.detail.serviceEventDetails.createManagedAccountStatus.account"
+
+  PermissionForEventsToInvokeLambda:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref SupportUpdateFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt AccountCreationEventRule.Arn

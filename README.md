@@ -1,6 +1,7 @@
 # AWS Account Support Tier Update Automation
 
-This project contains a CloudFormation template designed to automate the process of updating the support tier for newly created AWS accounts to a specified level. It leverages AWS Lambda and the AWS Support API to programmatically create support cases, aiming to simplify account management and ensure the desired support level is applied to each new account.
+This project contains a CloudFormation template designed to automate the process of updating the support tier for newly created AWS accounts to a specified level. It leverages AWS Lambda and the AWS Support API to programmatically create support cases, aiming to simplify account management and ensure the desired support level is applied to each new account. </br>
+- Due to restrictions that support API can be used only by **Business, Enterprise On-Ramp, or Enterprise Support plan** as described here: https://docs.aws.amazon.com/awssupport/latest/user/about-support-api.html this automation will work only when run from Organizatinal root account only!
 
 ## Features
 

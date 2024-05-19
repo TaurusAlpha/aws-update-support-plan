@@ -2,17 +2,17 @@ from __future__ import annotations
 import logging
 import boto3
 import os
-import cfnresponse  # type: ignore[import-untyped]
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
+from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
     from mypy_boto3_support import SupportClient
+    from mypy_boto3_sts import STSClient
 
 # Configure logging
-logging.basicConfig(
-    format="%(asctime)s %(message)s", level=os.getenv("logger_level", "DEBUG")
-)
 logger = logging.getLogger()
+logging.basicConfig(format="%(asctime)s %(message)s")
+logger.setLevel(logging.getLevelName(os.getenv("logger_level", "INFO")))
 
 SUPPORT_LEVEL_MAPPING = {
     "low": "basic",
@@ -23,11 +23,29 @@ SUPPORT_LEVEL_MAPPING = {
 }
 
 
-def check_support_plan(support_client: SupportClient) -> str:
+def check_support_plan(account_id: str) -> Optional[str]:
     """
     Check the current support plan of the account.
     """
+    role_arn = os.environ["assume_role_name"].replace("<ACCOUNT_ID>", account_id)
+
     try:
+        sts_client: STSClient = boto3.client("sts")
+        stsObject = sts_client.assume_role(
+            RoleArn=role_arn, RoleSessionName="AssumeRoleSession"
+        )
+        credentials = stsObject["Credentials"]
+    except ClientError as e:
+        logger.error(f"Error assuming role: {e}")
+        return None
+
+    try:
+        support_client: SupportClient = boto3.client(
+            "support",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
         response = support_client.describe_severity_levels(language="en")
         return (
             sorted(
@@ -40,7 +58,11 @@ def check_support_plan(support_client: SupportClient) -> str:
     except support_client.exceptions.ClientError as err:
         if err.response["Error"]["Code"] == "SubscriptionRequiredException":
             return SUPPORT_LEVEL_MAPPING["low"]
-        raise err
+        logger.error(f"ClientError in check_support_plan: {err}")
+        return None
+    except ClientError as e:
+        logger.error(f"Error describing severity levels: {e}")
+        return None
 
 
 def lambda_handler(event, context) -> None:
@@ -48,51 +70,35 @@ def lambda_handler(event, context) -> None:
     Lambda function handler for updating the support plan for a new account.
     """
     logger.info(f"Received event: {event}")
+    account_id = event["accountId"]
+    required_support_level = os.environ.get("required_support_level", "basic")
+
+    current_support_level = check_support_plan(account_id)
+    if current_support_level is None:
+        logger.error("Failed to check support plan. Exiting.")
+        return
+
+    if current_support_level == required_support_level:
+        logger.info(
+            f"Account {account_id} already has an {required_support_level} support plan."
+        )
+        return
+
     try:
-        # Extract the request type from the event
-        request_type = event["RequestType"]
-        # Extract the account ID from the Lambda function ARN
-        account_id = context.invoked_function_arn.split(":")[4]
-        required_support_level = os.environ.get("required_support_level", "basic")
+        support_client: SupportClient = boto3.client(
+            "support", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        )
 
-        # Handle creation logic
-        if request_type == "Create":
-            support_client: SupportClient = boto3.client(
-                "support", region_name=os.environ.get("AWS_REGION", "us-east-1")
-            )
-            if check_support_plan(support_client) == required_support_level:
-                logger.info(
-                    f"Account {account_id} already has an {required_support_level} support plan."
-                )
-                # Send a success response to CloudFormation
-                cfnresponse.send(
-                    event,
-                    context,
-                    cfnresponse.SUCCESS,
-                    {
-                        "Message": f"Account {account_id} already has an {required_support_level} support plan."
-                    },
-                )
-                return
-            response = support_client.create_case(
-                subject="Update Support Plan for New Account",
-                serviceCode="account-management",
-                severityCode="low",
-                categoryCode="other",
-                communicationBody=f"Please update the support plan of account {account_id} to {required_support_level}.",
-                issueType="customer-service",
-            )
-            logger.info(f"Create case response: {response}")
-            responseData = {"CaseId": response["caseId"]}
-            # Send a success response to CloudFormation
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
-
-        elif request_type in ["Update", "Delete"]:
-            # For Update and Delete requests, do nothing but signal SUCCESS
-            cfnresponse.send(
-                event, context, cfnresponse.SUCCESS, {}, event["PhysicalResourceId"]
-            )
-
-    except Exception as e:
-        # Report any exceptions as a FAILED
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Message": f"{e}"})
+        response = support_client.create_case(
+            subject="Update Support Plan for New Account",
+            serviceCode="account-management",
+            severityCode="low",
+            categoryCode="other",
+            communicationBody=f"Please update the support plan of account {account_id} to {required_support_level}.",
+            issueType="customer-service",
+        )
+        logger.info(f"Create case response: {response}")
+    except support_client.exceptions.ClientError as err:
+        logger.error(f"ClientError in create_case: {err}")
+    except ClientError as e:
+        logger.error(f"Error creating support case: {e}")
